@@ -1,14 +1,15 @@
 package com.example.smscenter
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -43,10 +44,13 @@ class MainActivity : ComponentActivity() {
 
     private val vm: SmsViewModel by viewModels()
 
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { vm.refresh() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vm.refresh()
-        // 如果通知监听已启用，启动保活定时器
         if (vm.listenerEnabled.value) {
             SmsKeepAliveReceiver.schedule(this)
         }
@@ -57,12 +61,12 @@ class MainActivity : ComponentActivity() {
                     vm = vm,
                     onEnableListener = {
                         openNotificationSettings()
-                        // 用户从设置页返回后可能已开启，检查并调度
                         vm.refresh()
                         if (vm.listenerEnabled.value) {
                             SmsKeepAliveReceiver.schedule(this@MainActivity)
                         }
                     },
+                    onRequestNotificationPerm = { requestNotificationPerm() },
                     onBatteryOptimization = { openBatterySettings() }
                 )
             }
@@ -72,7 +76,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         vm.refresh()
-        // 每次回到前台都确保保活定时器已调度
         if (vm.listenerEnabled.value) {
             SmsKeepAliveReceiver.schedule(this)
         }
@@ -85,6 +88,12 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
         }
         Toast.makeText(this, "请开启 SMSCenter 的通知使用权", Toast.LENGTH_LONG).show()
+    }
+
+    private fun requestNotificationPerm() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     private fun openBatterySettings() {
@@ -100,9 +109,15 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SmsApp(vm: SmsViewModel, onEnableListener: () -> Unit, onBatteryOptimization: () -> Unit) {
+fun SmsApp(
+    vm: SmsViewModel,
+    onEnableListener: () -> Unit,
+    onRequestNotificationPerm: () -> Unit,
+    onBatteryOptimization: () -> Unit
+) {
     val msgs by vm.messages.collectAsState()
     val listenerEnabled by vm.listenerEnabled.collectAsState()
+    val notificationsGranted by vm.notificationsGranted.collectAsState()
     val batteryOptimized by vm.batteryOptimized.collectAsState()
 
     Scaffold(
@@ -116,7 +131,7 @@ fun SmsApp(vm: SmsViewModel, onEnableListener: () -> Unit, onBatteryOptimization
         }
     ) { pad ->
         when {
-            // 第一步：开启通知使用权
+            // 第一步：通知使用权
             !listenerEnabled -> {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
@@ -137,7 +152,27 @@ fun SmsApp(vm: SmsViewModel, onEnableListener: () -> Unit, onBatteryOptimization
                     }
                 }
             }
-            // 第二步：关闭电池优化
+            // 第二步：通知显示权限（Android 13+）
+            !notificationsGranted -> {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("需要通知权限", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "SMSCenter 需要「通知」权限才能显示前台服务通知，确保持续运行。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 22.sp
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Button(onClick = onRequestNotificationPerm, modifier = Modifier.fillMaxWidth()) {
+                        Text("授予通知权限", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            // 第三步：电池优化
             !batteryOptimized -> {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
@@ -157,7 +192,7 @@ fun SmsApp(vm: SmsViewModel, onEnableListener: () -> Unit, onBatteryOptimization
                     }
                 }
             }
-            // 第三步：等待短信
+            // 第四步：等待短信
             msgs.isEmpty() -> {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(pad),
@@ -167,7 +202,7 @@ fun SmsApp(vm: SmsViewModel, onEnableListener: () -> Unit, onBatteryOptimization
                     Text("等待接收短信…", fontSize = 16.sp)
                 }
             }
-            // 第四步：显示短信列表
+            // 第五步：显示短信列表
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(pad).padding(horizontal = 12.dp),

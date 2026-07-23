@@ -1,9 +1,12 @@
 package com.example.smscenter
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +19,9 @@ class SmsViewModel(app: Application) : AndroidViewModel(app) {
     private val _listenerEnabled = MutableStateFlow(false)
     val listenerEnabled: StateFlow<Boolean> = _listenerEnabled.asStateFlow()
 
+    private val _notificationsGranted = MutableStateFlow(true)
+    val notificationsGranted: StateFlow<Boolean> = _notificationsGranted.asStateFlow()
+
     private val _batteryOptimized = MutableStateFlow(false)
     val batteryOptimized: StateFlow<Boolean> = _batteryOptimized.asStateFlow()
 
@@ -26,6 +32,10 @@ class SmsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refresh() {
         val ctx = getApplication<Application>()
+        // Android 13+ 通知权限
+        _notificationsGranted.value = if (Build.VERSION.SDK_INT >= 33) {
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
         // 通知使用权
         val flat = Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners")
         _listenerEnabled.value = flat?.contains(ctx.packageName) == true
