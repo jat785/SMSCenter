@@ -8,8 +8,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,9 +27,12 @@ object SmsSyncService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .addInterceptor(HttpLoggingInterceptor { msg -> Log.d(TAG, "OkHttp: $msg") }
+            .setLevel(HttpLoggingInterceptor.Level.BASIC))
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -50,7 +55,6 @@ object SmsSyncService {
         val json = buildJson(msg)
         val body = json.toRequestBody(jsonMediaType)
 
-        var lastException: Exception? = null
         val delays = longArrayOf(1000L, 3000L, 5000L) // 1s, 3s, 5s
 
         for (attempt in 1..MAX_RETRIES) {
@@ -66,12 +70,11 @@ object SmsSyncService {
                     response.close()
                     return
                 } else {
-                    Log.w(TAG, "❌ HTTP ${response.code} (尝试 $attempt): ${response.message}")
+                    Log.w(TAG, "❌ HTTP ${response.code} / ${response.message} (尝试 $attempt)")
                     response.close()
                 }
             } catch (e: Exception) {
-                lastException = e
-                Log.w(TAG, "❌ 网络异常 (尝试 $attempt): ${e.message}")
+                Log.e(TAG, "❌ 转发异常 (尝试 $attempt): ${e.javaClass.name} — ${e.message}", e)
             }
 
             if (attempt < MAX_RETRIES) {
@@ -81,7 +84,7 @@ object SmsSyncService {
             }
         }
 
-        Log.e(TAG, "转发失败（已重试 $MAX_RETRIES 次）: ${msg.sender} — ${msg.body.take(20)}")
+        Log.e(TAG, "转发最终失败（已重试 $MAX_RETRIES 次）: ${msg.sender} — ${msg.body.take(20)}")
     }
 
     private fun buildJson(msg: SmsMessage): String {

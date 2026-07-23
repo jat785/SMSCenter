@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMSCenter - 短信中心</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f0f0f0;
+  max-width: 600px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+.header {
+  position: sticky; top:0; z-index:10;
+  background: #fff; padding:12px 16px;
+  border-bottom:1px solid #ddd;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.header h1 { font-size:18px; }
+.status { font-size:12px; padding:4px 10px; border-radius:12px; }
+.status.online { background:#e8f5e9; color:#2e7d32; }
+.status.offline { background:#ffebee; color:#c62828; }
+.list { padding:8px 0 80px; }
+.card {
+  margin:6px 12px; padding:14px;
+  background:#fff; border-radius:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,0.08);
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+.card .meta {
+  display:flex; justify-content:space-between; align-items:center;
+  margin-bottom:6px;
+}
+.card .sender { font-weight:600; color:#1a73e8; font-size:15px; }
+.card .time { font-size:11px; color:#999; }
+.card .body { font-size:15px; color:#333; line-height:1.5; word-break:break-all; }
+.empty {
+  text-align:center; padding:60px 20px; color:#999; font-size:15px;
+}
+.fab {
+  position:fixed; bottom:24px; right:24px;
+  width:48px; height:48px; border-radius:50%;
+  background:#1a73e8; color:#fff; font-size:22px;
+  border:none; box-shadow:0 4px 12px rgba(26,115,232,0.4);
+  cursor:pointer; z-index:20;
+  display:flex; align-items:center; justify-content:center;
+}
+.fab:active { transform:scale(0.9); }
+.login-overlay {
+  position:fixed; top:0; left:0; width:100%; height:100%;
+  background:rgba(0,0,0,0.5); z-index:30;
+  display:flex; align-items:center; justify-content:center;
+}
+.login-box {
+  background:#fff; border-radius:12px; padding:24px;
+  width:300px; box-shadow:0 8px 32px rgba(0,0,0,0.2);
+}
+.login-box h2 { margin-bottom:16px; text-align:center; }
+.login-box input {
+  width:100%; padding:10px 12px; border:1px solid #ddd;
+  border-radius:8px; font-size:14px; margin-bottom:12px;
+  outline:none;
+}
+.login-box input:focus { border-color:#1a73e8; }
+.login-box button {
+  width:100%; padding:10px; background:#1a73e8; color:#fff;
+  border:none; border-radius:8px; font-size:15px; cursor:pointer;
+}
+.login-box button:active { background:#1557b0; }
+.login-box .hint { font-size:12px; color:#999; margin-top:8px; text-align:center; }
+.logout-btn {
+  background:none; border:1px solid #c62828; color:#c62828;
+  font-size:12px; padding:4px 10px; border-radius:12px;
+  cursor:pointer; margin-left:8px;
+}
+</style>
+</head>
+<body>
+
+<!-- Token 输入框 -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>🔐 输入 Token</h2>
+    <input type="text" id="tokenInput" placeholder="请输入访问 Token" autocomplete="off">
+    <button id="loginBtn">登录</button>
+    <div class="hint">Token 仅在当前浏览器会话有效，关闭浏览器后需重新输入</div>
+    <div class="hint" style="color:#c62828;display:none" id="loginError">Token 无效</div>
+  </div>
+</div>
+
+<div class="header">
+  <h1>📨 SMSCenter</h1>
+  <div>
+    <span class="status offline" id="status">未连接</span>
+    <button class="logout-btn" id="logoutBtn" style="display:none">退出</button>
+  </div>
+</div>
+<div class="list" id="list"></div>
+<button class="fab" id="refreshBtn" title="重新加载" style="display:none">↻</button>
+<div class="empty" id="empty">加载中…</div>
+
+<script>
+// 使用 sessionStorage（关闭浏览器后自动清除）
+let TOKEN = sessionStorage.getItem('sms_token') || '';
+
+const API_URL = '/api/sms/list';
+const SSE_PATH = '/api/sms/stream';
+
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
+const statusEl = document.getElementById('status');
+const refreshBtn = document.getElementById('refreshBtn');
+const loginOverlay = document.getElementById('loginOverlay');
+const tokenInput = document.getElementById('tokenInput');
+const loginBtn = document.getElementById('loginBtn');
+const loginError = document.getElementById('loginError');
+const logoutBtn = document.getElementById('logoutBtn');
+
+let messages = [];
+let abortController = null;
+
+function render() {
+  listEl.innerHTML = '';
+  if (messages.length === 0) {
+    emptyEl.style.display = 'block';
+    emptyEl.textContent = '暂无短信';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  const fragment = document.createDocumentFragment();
+  for (const msg of messages) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="meta">
+        <span class="sender">${esc(msg.sender)}</span>
+        <span class="time">${esc(msg.time)}</span>
+      </div>
+      <div class="body">${esc(msg.body)}</div>
+    `;
+    fragment.appendChild(card);
+  }
+  listEl.appendChild(fragment);
+}
+
+function esc(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+async function loadHistory() {
+  try {
+    const res = await fetch(API_URL, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (res.ok) {
+      messages = await res.json();
+      render();
+    } else if (res.status === 403) {
+      sessionStorage.removeItem('sms_token');
+      TOKEN = '';
+      showLogin();
+    }
+  } catch(e) {
+    console.log('加载历史失败', e);
+  }
+}
+
+// SSE 流：用 fetch + ReadableStream，Token 在 Authorization Header 中，不在 URL
+function connectSSE() {
+  if (abortController) { abortController.abort(); abortController = null; }
+  abortController = new AbortController();
+
+  fetch(SSE_PATH, {
+    headers: { 'Authorization': 'Bearer ' + TOKEN },
+    signal: abortController.signal
+  })
+  .then(response => {
+    if (response.status === 403) {
+      sessionStorage.removeItem('sms_token');
+      TOKEN = '';
+      showLogin();
+      return;
+    }
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+
+    statusEl.textContent = '已连接';
+    statusEl.className = 'status online';
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          // 连接关闭，重连
+          statusEl.textContent = '重连中';
+          statusEl.className = 'status offline';
+          setTimeout(() => { if (TOKEN) connectSSE(); }, 3000);
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        // 解析 SSE 格式的 "data: {...}\n\n"
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // 保留不完整的最后一行
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const msg = JSON.parse(line.substring(6));
+              messages.unshift(msg);
+              render();
+            } catch(e) {}
+          }
+        }
+        read();
+      });
+    }
+    read();
+  })
+  .catch(err => {
+    if (err.name === 'AbortError') return;
+    statusEl.textContent = '重连中';
+    statusEl.className = 'status offline';
+    setTimeout(() => { if (TOKEN) connectSSE(); }, 3000);
+  });
+}
+
+// 登录
+function showLogin() {
+  loginOverlay.style.display = 'flex';
+  refreshBtn.style.display = 'none';
+  logoutBtn.style.display = 'none';
+  listEl.innerHTML = '';
+  emptyEl.style.display = 'block';
+  emptyEl.textContent = '请输入 Token';
+  statusEl.textContent = '未登录';
+  statusEl.className = 'status offline';
+  if (abortController) { abortController.abort(); abortController = null; }
+}
+
+function doLogin() {
+  const input = tokenInput.value.trim();
+  if (!input) return;
+  fetch(API_URL, {
+    headers: { 'Authorization': 'Bearer ' + input }
+  })
+    .then(res => {
+      if (res.ok) {
+        TOKEN = input;
+        sessionStorage.setItem('sms_token', TOKEN);
+        loginOverlay.style.display = 'none';
+        loginError.style.display = 'none';
+        tokenInput.value = '';
+        refreshBtn.style.display = 'flex';
+        logoutBtn.style.display = 'inline-block';
+        loadHistory();
+        connectSSE();
+      } else {
+        loginError.style.display = 'block';
+      }
+    })
+    .catch(() => {
+      loginError.style.display = 'block';
+    });
+}
+
+loginBtn.onclick = doLogin;
+tokenInput.onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
+
+// 退出
+logoutBtn.onclick = () => {
+  sessionStorage.removeItem('sms_token');
+  TOKEN = '';
+  showLogin();
+};
+
+refreshBtn.onclick = loadHistory;
+
+// 启动
+if (TOKEN) {
+  loginOverlay.style.display = 'none';
+  refreshBtn.style.display = 'flex';
+  logoutBtn.style.display = 'inline-block';
+  loadHistory();
+  connectSSE();
+} else {
+  showLogin();
+}
+</script>
+</body>
+</html>
