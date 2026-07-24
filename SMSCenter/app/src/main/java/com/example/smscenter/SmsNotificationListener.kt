@@ -16,6 +16,11 @@ class SmsNotificationListener : NotificationListenerService() {
         private const val TAG = "SmsNotif"
         private const val CHANNEL_ID = "sms_foreground"
         private const val NOTIF_ID = 1001
+
+        /** 供 ViewModel 查询服务是否真正在运行（权限开了不代表服务已绑定） */
+        @Volatile
+        var isConnected: Boolean = false
+            private set
     }
 
     override fun onCreate() {
@@ -28,21 +33,33 @@ class SmsNotificationListener : NotificationListenerService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // 用户从最近任务划掉 → 重新启动保活
         Log.d(TAG, "onTaskRemoved，重新调度保活")
         SmsKeepAliveReceiver.schedule(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // 服务被系统杀掉 → 重新调度保活（下一轮 Alarm 触发时会检查并通知用户）
+        isConnected = false
         Log.d(TAG, "onDestroy，重新调度保活")
         try {
             SmsKeepAliveReceiver.schedule(this)
         } catch (_: Exception) {}
     }
 
-    /** 已知短信类应用包名（常见国产手机/Android 原生） */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        isConnected = true
+        Log.d(TAG, "✅ onListenerConnected — 通知监听已绑定")
+        startForeground(NOTIF_ID, buildForegroundNotification())
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        isConnected = false
+        Log.w(TAG, "⚠️ onListenerDisconnected — 通知监听已断开")
+    }
+
+    /** 已知短信类应用包名 */
     private val smsPackages = setOf(
         "com.android.mms",
         "com.google.android.apps.messaging",
@@ -58,10 +75,7 @@ class SmsNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName ?: ""
-
-        // 只处理短信类应用的通知
         val isSms = pkg in smsPackages || pkg.contains("mms", ignoreCase = true)
-
         if (!isSms) {
             Log.d(TAG, "跳过非短信应用: $pkg")
             return
@@ -70,7 +84,6 @@ class SmsNotificationListener : NotificationListenerService() {
         val extras = sbn.notification.extras
         val title = extras.getString("android.title") ?: ""
         val text = extras.getString("android.text") ?: ""
-
         if (title.isBlank() && text.isBlank()) return
 
         Log.d(TAG, "短信通知: pkg=$pkg title=$title text=$text")
@@ -79,9 +92,7 @@ class SmsNotificationListener : NotificationListenerService() {
         val body = if (text.length > 2 && text != sender) text else ""
 
         if (sender.isNotBlank()) {
-            SmsRepository.add(
-                SmsMessage(sender = sender, body = body, timestamp = sbn.postTime)
-            )
+            SmsRepository.add(SmsMessage(sender = sender, body = body, timestamp = sbn.postTime))
             Log.d(TAG, "已接收: $sender — $body")
         }
     }

@@ -19,6 +19,9 @@ class SmsViewModel(app: Application) : AndroidViewModel(app) {
     private val _listenerEnabled = MutableStateFlow(false)
     val listenerEnabled: StateFlow<Boolean> = _listenerEnabled.asStateFlow()
 
+    private val _serviceConnected = MutableStateFlow(false)
+    val serviceConnected: StateFlow<Boolean> = _serviceConnected.asStateFlow()
+
     private val _notificationsGranted = MutableStateFlow(true)
     val notificationsGranted: StateFlow<Boolean> = _notificationsGranted.asStateFlow()
 
@@ -36,9 +39,11 @@ class SmsViewModel(app: Application) : AndroidViewModel(app) {
         _notificationsGranted.value = if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         } else true
-        // 通知使用权
+        // 通知使用权（系统设置中是否开启）
         val flat = Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners")
         _listenerEnabled.value = flat?.contains(ctx.packageName) == true
+        // 服务是否实际已绑定
+        _serviceConnected.value = SmsNotificationListener.isConnected
         // 电池优化
         _batteryOptimized.value = if (Build.VERSION.SDK_INT >= 23) {
             val pm = ctx.getSystemService(PowerManager::class.java)

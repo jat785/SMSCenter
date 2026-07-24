@@ -117,6 +117,7 @@ fun SmsApp(
 ) {
     val msgs by vm.messages.collectAsState()
     val listenerEnabled by vm.listenerEnabled.collectAsState()
+    val serviceConnected by vm.serviceConnected.collectAsState()
     val notificationsGranted by vm.notificationsGranted.collectAsState()
     val batteryOptimized by vm.batteryOptimized.collectAsState()
 
@@ -169,6 +170,27 @@ fun SmsApp(
                     Spacer(Modifier.height(24.dp))
                     Button(onClick = onRequestNotificationPerm, modifier = Modifier.fillMaxWidth()) {
                         Text("授予通知权限", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            // 第2.5步：通知使用权已开但服务未绑定（华为休眠后遗症）
+            listenerEnabled && !serviceConnected -> {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("⚠️ 服务未启动", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "通知使用权已开启，但系统未绑定监听服务。\n\n" +
+                        "请先关闭通知使用权，再重新打开，然后重启 App。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 22.sp
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Button(onClick = onEnableListener, modifier = Modifier.fillMaxWidth()) {
+                        Text("前往通知使用权设置", fontWeight = FontWeight.Bold)
                     }
                 }
             }
